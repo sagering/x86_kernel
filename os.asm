@@ -1,23 +1,14 @@
-org 0x0000
-bits 16
+org 0x8000
+use32
 
-mov ax, cs ; not sure
-mov ds, ax ; not sure
+mov ebx, 0xb8000 ; The video address
+mov al, 'H'      ; The character to be print
+mov ah, 0x0F     ; The color: white(F) on black(0)
+mov [ebx], ax
 
-print_msg:
-  mov si, msg
+mov ebx, 0xb8002 ; The video address
+mov al, 'i'      ; The character to be print
+mov ah, 0x0F     ; The color: white(F) on black(0)
+mov [ebx], ax
 
-print_msg_repeat:
-  mov al, [si]
-  add si, 1
-
-  cmp al, 0
-  je print_msg
-
-  mov ah, 0xe
-  mov bh, 0x0 ; page number
-  mov bl, 0x0 ; foreground color
-  int 0x10
-  jmp print_msg_repeat
-
- msg db "Hello World!\n", 0
+ret
