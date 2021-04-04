@@ -15,19 +15,30 @@ void clear_screen();
 void init_paging();
 void init_interrupt_handlers();
 
-i32 trigger_interrupt();
+void print_u32();
+
+u32 timer_cnt = 0;
 
 void start() 
 {
   clear_screen();
 
+  print("Init paging...\n");
+  init_paging();
+  print("Paging initialized!\n");
+
   print("Init interrupts...\n");
   init_interrupt_handlers();
   print("Interrupts initialized!\n");
 
-  print("Init paging...\n");
-  init_paging();
-  print("Paging initialized!\n");
+  while(1)
+  {
+    if(timer_cnt >= 18)
+    {
+      print("Tick\n");
+      timer_cnt = 0;
+    }
+  }
 }
 
 extern u32 _bss_end;
@@ -156,35 +167,50 @@ struct InterruptDescriptor interrupt_descriptor_table[NUM_INTERRUPT_DESCRIPTORS]
 struct IDTR idtr;
 
 struct ir_frame;
+
 __attribute__((interrupt)) void default_interrupt_handler(struct ir_frame* f)
 {
-  print("Default interrupt handler.");
-  while(1);
+  print("Default interrupt handler.\n");
 }
 
-void load_idt(u32 pIDTR)
+__attribute__((interrupt)) void timer_interrupt_handler(struct ir_frame* f)
+{
+  ++timer_cnt;
+  asm("mov $0x20, %al");
+  asm("outb %al, $0x20"); // end of interrupt pic1, expected by the pic master
+  asm("outb %al, $0xa0"); // end of interrupt pic2, for pic slave, not always needed
+}
+
+void enable_interrupts(u32 pIDTR)
 {
   asm("mov 8(%esp), %eax");
   asm("lidt (%eax)");
+  asm("sti");
+}
+
+void set_interrupt_handler(u8 idx, u32 handler)
+{
+    struct InterruptDescriptor* id = &interrupt_descriptor_table[idx];
+
+    id->selector = 0x0008; // code segment
+    id->offset0  = 0x0000ffff & handler;
+    id->offset1  = 0xffff0000 & handler;
+    id->flags    = 0x8e00; // type of descriptor (32 bit interrupt call gate)
 }
 
 void init_interrupt_handlers()
 {
   for(int i = 0; i < NUM_INTERRUPT_DESCRIPTORS; ++i)
   {
-    struct InterruptDescriptor* id = &interrupt_descriptor_table[i];
-    u32 ir = (u32) default_interrupt_handler;
-
-    id->selector = 0x0008;
-    id->offset0  = 0x0000ffff & ir;
-    id->offset1  = 0xffff0000 & ir;
-    id->flags    = 0x8e00;
+    set_interrupt_handler(i, (u32) default_interrupt_handler);
   }
+
+  set_interrupt_handler(8, (u32) timer_interrupt_handler); // by default, channel 0 of the pic is linked to interrupt vector 8, this should be reconfigured, because it conflicts with the x86 errors / interrupts; the default frequency of the timer interrupts is 18 Hz
 
   idtr.base = (u32) &interrupt_descriptor_table;
   idtr.limit = sizeof(struct InterruptDescriptor) * NUM_INTERRUPT_DESCRIPTORS - 1;
 
-  load_idt((u32) &idtr);
+  enable_interrupts((u32) &idtr);
 }
 
 char* base = (char*) (0xb8000);
@@ -200,6 +226,11 @@ void put_char(char c)
   {
     current_col = 0;
     ++current_row;
+    if(current_row >= NUM_ROWS)
+    {
+      clear_screen();
+      current_row = 0;
+    }
     return;
   }
 
