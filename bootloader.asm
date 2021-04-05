@@ -13,7 +13,7 @@ mov ax, 0x0
 mov es, ax     ; es:bx pointer to buffer
 mov bx, 0x8000 ; es:bx pointer to buffer
 mov ah, 0x02 ; function
-mov al, 3 ; number of sectors to read
+mov al, 8 ; number of sectors to read
 mov ch, 0 ; track
 mov cl, 2 ; sector
 mov dh, 0 ; head

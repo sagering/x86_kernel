@@ -6,9 +6,9 @@ main.bin: main.c linker.lds
 	ld -melf_i386 -o main.bin -T linker.lds main.o
 
 bootdisk.img: bootloader.bin main.bin
-	dd if=/dev/zero of=bootdisk.img bs=512 count=4
+	dd if=/dev/zero of=bootdisk.img bs=512 count=9
 	dd conv=notrunc if=bootloader.bin of=bootdisk.img bs=512 seek=0 count=1
-	dd conv=notrunc if=main.bin of=bootdisk.img bs=512 seek=1 count=3
+	dd conv=notrunc if=main.bin of=bootdisk.img bs=512 seek=1 count=8
 
 run: bootdisk.img
 	qemu-system-i386 -machine q35 -fda bootdisk.img
