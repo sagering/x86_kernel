@@ -8,40 +8,45 @@ typedef unsigned int u32;
 typedef unsigned short int u16;
 typedef unsigned char u8;
 
-void put_char(char);
-void print(char const*);
 void clear_screen();
+void put_char(char);
 
+void print(char const*);
+void print_u32();
+void print_u32_hex();
+
+void init_gdt();
 void init_paging();
 void init_interrupt_handlers();
 
 void switch_to_user_mode();
 
-void print_u32();
-
 void start() 
 {
   clear_screen();
 
-  print("Init paging...\n");
-  init_paging();
-  print("Paging initialized!\n");
+  print("Init gdt...\n");
+  init_gdt();
+  print("Gdt initialized!\n");
 
   print("Init interrupts...\n");
   init_interrupt_handlers();
   print("Interrupts initialized!\n");
 
+  print("Init paging...\n");
+  init_paging();
+  print("Paging initialized!\n");
+
   print("Switching to user mode...\n");
   switch_to_user_mode();
 
   print("Not reached");
-  while(1);
 }
 
-void user_mode()
+__attribute__((naked)) void user_mode()
 {
-  print("User mode.\n");
-  while(1); 
+  int i =0 ;
+  while(1) { if(i > 1000000) { i = 0; print("Hello from userland!\n"); } ++i; }
 }
 
 extern u32 _bss_end;
@@ -50,6 +55,89 @@ void memset(u8* dst, u8 val, u32 size)
 {
   while(size--) *dst++ = val;
 }
+
+struct SegmentDescriptor 
+{
+  u16 limit0;
+  u16 base0;
+  u8  base1;
+  u8  flags0;
+  u8  limit1 : 4;
+  u8  flags1 : 4;
+  u8  base2;
+} __attribute__((packed));
+
+struct TaskStateSegmentDescriptor 
+{
+  u16 limit0;
+  u16 base0;
+  u8  base1;
+  u8  flags0;
+  u8  limit1 : 4;
+  u8  flags1 : 4;
+  u8  base2;
+} __attribute__((packed));
+
+struct NullDescriptor 
+{
+  u32 hi;
+  u32 lo;
+};
+
+union Descriptor
+{
+  struct NullDescriptor null;
+  struct SegmentDescriptor segment;
+};
+
+struct GDTR
+{
+  u16 limit;
+  u32 base;
+} __attribute__((packed));
+
+struct TaskStateSegment 
+{
+  u32 prev_task_link;       // 0
+  u32 esp0;                 // 4
+  u32 ss0;                  // 8
+  u32 esp1;                 // 12                                                                                         
+  u32 ss1;                  // 16                                                                                        
+  u32 esp2;                 // 20
+  u32 ss2;                  // 24                                                                                        
+  u32 cr3;                  // 28                                                                                        
+  u32 eip;                  // 32                                                                                        
+  u32 eflags;               // 36                                                                                           
+  u32 eax;                  // 40                                                                                        
+  u32 ecx;                  // 44                                                                                        
+  u32 edx;                  // 48                                                                                        
+  u32 ebx;                  // 52                                                                                        
+  u32 esp;                  // 56                                                                                        
+  u32 ebp;                  // 60                                                                                        
+  u32 esi;                  // 64                                                                                        
+  u32 edi;                  // 68                                                                                        
+  u32 es;                   // 72                                                                                       
+  u32 cs;                   // 76                                                                                       
+  u32 ss;                   // 80                                                                                       
+  u32 ds;                   // 84                                                                                       
+  u32 fs;                   // 88                                                                                       
+  u32 gs;                   // 92                                                                                       
+  u32 ldt_segment_selector; // 96
+  u16 t : 1;                // 100
+  u16 reserved : 15;
+  u16 io_map_base;
+} __attribute__((packed));
+
+#define PAGE_SIZE           4096
+struct TaskStateSegment tss __attribute__((aligned(PAGE_SIZE)));
+
+#define NUM_DESCRIPTORS 6
+union Descriptor gdt[NUM_DESCRIPTORS];
+struct GDTR gdtr;
+
+#define TSS_STACK_SIZE (1024 / 4)
+
+u32 tss_stack[TSS_STACK_SIZE];
 
 void outb(u16 port, u8 val)
 {
@@ -73,12 +161,11 @@ void remap_pic()
 #define PD_NUM_ENTRIES      1024
 #define PT_NUM_ENTRIES      1024
 
-#define PAGE_SIZE           4096
 #define PAGE_DIR_SIZE       PAGE_SIZE * 1024
 
 #define PDE_PRESENT    ( 1 << 0 )
 #define PDE_WRITEABLE  ( 1 << 1 )
-#define PDE_SUPERVISOR ( 1 << 2 )
+#define PDE_USER       ( 1 << 2 )
 #define PDE_PWT        ( 1 << 3 ) // page level write through
 #define PDE_PCD        ( 1 << 4 ) // page level cache disable
 #define PDE_ACCESSED   ( 1 << 5 )
@@ -86,7 +173,7 @@ void remap_pic()
 
 #define PTE_PRESENT    ( 1 << 0 )
 #define PTE_WRITEABLE  ( 1 << 1 )
-#define PTE_SUPERVISOR ( 1 << 2 )
+#define PTE_USER       ( 1 << 2 )
 #define PTE_PWT        ( 1 << 3 ) // page level write through
 #define PTE_PCD        ( 1 << 4 ) // page level cache disable
 #define PTE_ACCESSED   ( 1 << 5 )
@@ -100,7 +187,7 @@ typedef u32 PageTableEntry;     // PTE
 // page directory needs to be 4096 byte aligned, because only 20 bits in cr3 are used to address the page directory
 PageDirectoryEntry page_dir[PD_NUM_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 // page table needs to be 4096 byte aligned, because only 20 bits in page directory entry are used to address the page table
-PageTableEntry     page_table_entries[PD_NUM_ENTRIES * PT_NUM_ENTRIES] __attribute__((aligned(PAGE_SIZE)));;
+PageTableEntry     page_table_entries[PD_NUM_ENTRIES * PT_NUM_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 u32 round_down(u32 val, u32 low)
 {
@@ -109,16 +196,24 @@ u32 round_down(u32 val, u32 low)
 
 void enable_paging()
 {
+  asm("push %eax");
   asm("mov %cr0, %eax");
   asm("or $0x80000000, %eax"); // set bit 31 of cr0 to enable paging
   asm("mov %eax, %cr0");
+  asm("pop %eax");
 }
 
 // cr3 bits 31:12 hold the physical address of the page directory
-void set_cr3(u32 val)
+void write_cr3(u32 val)
 {
-  asm("mov 8(%esp), %eax");
-  asm("mov %eax, %cr3");
+  asm volatile ("mov %0, %%cr3" :: "a" ( val ) );
+}
+
+u32 read_cr3()
+{
+  u32 cr3 = 0;
+  asm volatile ("mov %%cr3, %0" : "=a" ( cr3 ) );
+  return cr3;
 }
 
 void print_u32(u32 val)
@@ -142,6 +237,121 @@ void print_u32(u32 val)
   put_char('\n');
 }
 
+void print_u32_hex(u32 val)
+{
+  for(int i = 28; i >=0; i -= 4)
+  {
+  u8 c = (val >> i) & 0xf;
+  switch(c)
+  {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 9:
+  put_char(c + '0');
+  break;
+  case 10: put_char('a'); break;
+  case 11: put_char('b'); break;
+  case 12: put_char('c'); break;
+  case 13: put_char('d'); break;
+  case 14: put_char('e'); break;
+  case 15: put_char('f'); break;
+  }
+  }
+  put_char('\n');
+}
+
+void init_gdt()
+{
+  gdt[0].null.hi = 0;
+  gdt[0].null.lo = 0;
+
+  // priviliged code 0x8
+  gdt[1].segment.limit0 = 0xffff;
+  gdt[1].segment.limit1 = 0xf;
+
+  gdt[1].segment.base0 = 0x0;
+  gdt[1].segment.base1 = 0x0;
+  gdt[1].segment.base2 = 0x0;
+
+  gdt[1].segment.flags0 = 0x9a;
+  gdt[1].segment.flags1 = 0xc;
+
+  // priviliged data 0x10
+  gdt[2].segment.limit0 = 0xffff;
+  gdt[2].segment.limit1 = 0xf;
+
+  gdt[2].segment.base0 = 0x0;
+  gdt[2].segment.base1 = 0x0;
+  gdt[2].segment.base2 = 0x0;
+
+  gdt[2].segment.flags0 = 0x92;
+  gdt[2].segment.flags1 = 0xc;
+
+  // user code 0x18
+  gdt[3].segment.limit0 = 0xffff;
+  gdt[3].segment.limit1 = 0xf;
+
+  gdt[3].segment.base0 = 0x0;
+  gdt[3].segment.base1 = 0x0;
+  gdt[3].segment.base2 = 0x0;
+
+  gdt[3].segment.flags0 = 0xfa;
+  gdt[3].segment.flags1 = 0xc;
+
+  // user data 0x20
+  gdt[4].segment.limit0 = 0xffff;
+  gdt[4].segment.limit1 = 0xf;
+
+  gdt[4].segment.base0 = 0x0;
+  gdt[4].segment.base1 = 0x0;
+  gdt[4].segment.base2 = 0x0;
+
+  gdt[4].segment.flags0 = 0xf2;
+  gdt[4].segment.flags1 = 0xc;
+
+  // tss 0x28
+  gdt[5].segment.limit0 = ((sizeof(struct TaskStateSegment) - 1) >>  0) & 0xffff;
+  gdt[5].segment.limit1 = ((sizeof(struct TaskStateSegment) - 1) >> 16) & 0x000f;
+
+  gdt[5].segment.base0 = ((u32)(&tss) >>  0) & 0xffff;
+  gdt[5].segment.base1 = ((u32)(&tss) >> 16) & 0x000f;
+  gdt[5].segment.base2 = ((u32)(&tss) >> 24) & 0x000f;
+
+  gdt[5].segment.flags0 = 0x89;
+  gdt[5].segment.flags1 = 0x0;
+
+  // gdtr
+  gdtr.limit = sizeof(union Descriptor) * NUM_DESCRIPTORS - 1;
+  gdtr.base = (u32) gdt;
+
+  // tss
+  tss.ss0 = 0x10; // priviliged data segment descriptor selector
+  tss.esp0 = (u32) &tss_stack[TSS_STACK_SIZE - 1];
+  tss.cr3 = (u32) &page_dir;
+
+  // load gdt, segment registers and task register
+  asm volatile ("lgdt (%0);" :: "a"((u32) &gdtr));
+  asm volatile ("    \
+    push %eax;       \
+    mov $0x10, %eax; \
+    mov %eax, %ds;   \
+    mov %eax, %es;   \
+    mov %eax, %fs;   \
+    mov %eax, %gs;   \
+    mov %eax, %ss;   \
+    mov $0x28, %ax;  \
+    ltr %ax;         \
+    pop %eax;        \
+    ");
+}
+
 void init_paging()
 {
   // set page table for each page direcory entry 
@@ -161,11 +371,11 @@ void init_paging()
     u32 *pt = (u32*) (*pde & 0xfffff000);
     u32 *pte = &pt[ptIdx];
 
-    *pde |= PDE_PRESENT;
-    *pte = i | PTE_PRESENT | PTE_WRITEABLE;
+    *pde |= PDE_PRESENT | PTE_WRITEABLE | PTE_USER;
+    *pte = i | PTE_PRESENT | PTE_WRITEABLE | PTE_USER;
   }
 
-  set_cr3( (u32) &page_dir );
+  write_cr3( (u32) &page_dir );
   enable_paging();
 }
 
@@ -193,108 +403,185 @@ struct ir_frame;
 __attribute__((interrupt)) void default_interrupt_handler(struct ir_frame* f)
 {
   print("Default interrupt handler.\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir0(struct ir_frame* f)
 {
   print("ir0\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir1(struct ir_frame* f)
 {
   print("ir1\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir2(struct ir_frame* f)
 {
   print("ir2\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir3(struct ir_frame* f)
 {
   print("ir3\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir4(struct ir_frame* f)
 {
   print("ir4\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir5(struct ir_frame* f)
 {
   print("ir5\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir6(struct ir_frame* f)
 {
-  print("ir6\n");
+  print("ir6: invalid opcode exception\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir7(struct ir_frame* f)
 {
   print("ir7\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir8(struct ir_frame* f)
 {
   print("ir8\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir9(struct ir_frame* f)
 {
   print("ir9\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir10(struct ir_frame* f)
 {
   print("ir10\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir11(struct ir_frame* f)
 {
-  print("ir11\n");
+  print("ir11: invalid TSS exception\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir12(struct ir_frame* f)
 {
   print("ir12\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir13(struct ir_frame* f)
 {
-  print("ir13\n");
+  print("ir13: general protection fault\n");
+
+  u32 volatile error = 0;
+  asm volatile ("mov 0x4(%%ebp), %0" : "=r"(error) );
+  print("error code:");
+  print_u32_hex(error);
+
+  print("ext:");
+  print_u32((error >> 0) & 0x1);
+  print("idt:");
+  print_u32((error >> 1) & 0x1);
+  print("ti:");
+  print_u32((error >> 2) & 0x1);
+  print("segment selector index:");
+  print_u32(error >> 3);
+
+  u32 volatile eip = 0;
+  asm volatile ("mov 0x8(%%ebp), %0" : "=r"(eip) );
+  print("eip:");
+  print_u32_hex(eip);
+
+  while(1);
+
+  // TODO: pop error code off the stack
 }
 __attribute__((interrupt)) void ir14(struct ir_frame* f)
 {
-  print("ir14\n");
+  print("ir14: page fault\n");
+
+  u32 volatile error = 0;
+  asm volatile ("mov 0x4(%%ebp), %0" : "=r"(error) );
+  print("error code:");
+  print_u32_hex(error);
+
+  print("p:");
+  print_u32_hex((error >> 0) & 0x1);
+  print("w/r:");
+  print_u32_hex((error >> 1) & 0x1);
+  print("u/s:");
+  print_u32_hex((error >> 2) & 0x1);
+  print("rsvd:");
+  print_u32_hex((error >> 3) & 0x1);
+  print("i/d:");
+  print_u32_hex((error >> 4) & 0x1);
+  print("pk:");
+  print_u32_hex((error >> 5) & 0x1);
+  print("ss:");
+  print_u32_hex((error >> 6) & 0x1);
+  print("sgx:");
+  print_u32_hex((error >> 15) & 0x1);
+
+  u32 volatile eip = 0;
+  asm volatile ("mov 0x8(%%ebp), %0" : "=r"(eip) );
+  print("eip:");
+  print_u32_hex(eip);
+  print_u32_hex((u32)user_mode);
+
+  while(1);
+
+  // TODO: pop error code off the stack
 }
 __attribute__((interrupt)) void ir15(struct ir_frame* f)
 {
   print("ir15\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir16(struct ir_frame* f)
 {
   print("ir16\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir17(struct ir_frame* f)
 {
   print("ir17\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir18(struct ir_frame* f)
 {
   print("ir18\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir19(struct ir_frame* f)
 {
   print("ir19\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir20(struct ir_frame* f)
 {
   print("ir20\n");
+  while(1);
 }
 __attribute__((interrupt)) void ir21(struct ir_frame* f)
 {
   print("ir21\n");
+  while(1);
 }
 
 __attribute__((interrupt)) void timer_interrupt_handler(struct ir_frame* f)
 {
+  print("Timer tick\n");
+  asm("push %eax");
   asm("mov $0x20, %al");
   asm("outb %al, $0x20"); // end of interrupt pic1, expected by the pic master
   asm("outb %al, $0xa0"); // end of interrupt pic2, for pic slave, not always needed
+  asm("pop %eax");
 }
 
 void enable_interrupts(u32 pIDTR)
 {
-  asm("mov 8(%esp), %eax");
-  asm("lidt (%eax)");
-  asm("sti");
+  asm volatile ("lidt (%0); sti;" :: "a"(pIDTR));
 }
 
 void set_interrupt_handler(u8 idx, u32 handler)
@@ -363,7 +650,7 @@ __attribute__((naked)) void switch_to_user_mode()
 
   asm volatile ("   \
     cli;            \
-    mov $0x10, %ax; \
+    mov $0x23, %ax; \
     mov %ax, %ds;   \
     mov %ax, %es;   \
     mov %ax, %fs;   \
@@ -371,13 +658,13 @@ __attribute__((naked)) void switch_to_user_mode()
                     \
     mov %esp, %eax; \
                     \
-    pushl $0x10;    \
-    pushl %eax;     \
+    push $0x23;     \
+    push %eax;      \
     pushf;          \
     pop %eax;       \
     or $0x200, %eax;\
     push %eax;      \
-    pushl $0x08;    \
+    push $0x1b;     \
     push $user_mode;\
     iret;           \
   ");
