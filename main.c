@@ -18,6 +18,7 @@ void print_u32_hex();
 void init_gdt();
 void init_paging();
 void init_interrupt_handlers();
+void init_tasks();
 
 void switch_to_user_mode();
 
@@ -37,24 +38,13 @@ void start()
   init_paging();
   print("Paging initialized!\n");
 
+  init_tasks();
+
   print("Switching to user mode...\n");
-  switch_to_user_mode();
-
-  print("Not reached");
-}
-
-__attribute__((naked)) void user_mode()
-{
-  int i =0 ;
-  while(1) { if(i > 1000000) { i = 0; print("Hello from userland!\n"); } ++i; }
+  asm volatile("jmp switch_to_user_mode");
 }
 
 extern u32 _bss_end;
-
-void memset(u8* dst, u8 val, u32 size)
-{
-  while(size--) *dst++ = val;
-}
 
 struct SegmentDescriptor 
 {
@@ -527,7 +517,6 @@ __attribute__((interrupt)) void ir14(struct ir_frame* f)
   asm volatile ("mov 0x8(%%ebp), %0" : "=r"(eip) );
   print("eip:");
   print_u32_hex(eip);
-  print_u32_hex((u32)user_mode);
 
   while(1);
 
@@ -569,19 +558,129 @@ __attribute__((interrupt)) void ir21(struct ir_frame* f)
   while(1);
 }
 
-__attribute__((interrupt)) void timer_interrupt_handler(struct ir_frame* f)
+u32 read_addr(u32 addr)
 {
-  print("Timer tick\n");
-  asm("push %eax");
-  asm("mov $0x20, %al");
-  asm("outb %al, $0x20"); // end of interrupt pic1, expected by the pic master
-  asm("outb %al, $0xa0"); // end of interrupt pic2, for pic slave, not always needed
-  asm("pop %eax");
+  return *((u32*) addr);
+}
+
+void write_addr(u32 addr, u32 val)
+{
+  *((u32*) addr) = val;
+}
+
+#define TASK_STACK_SIZE (PAGE_SIZE / sizeof(u32))
+#define NUM_TASKS 10
+struct Task
+{
+  u32 stack[TASK_STACK_SIZE] __attribute__((aligned(PAGE_SIZE)));
+  u32 id;
+  u32 cr3;
+
+  u32 eip;
+  u32 cs;
+  u32 eflags;
+  u32 esp;
+  u32 ss;
+
+  u32 eax;
+  u32 ecx;
+  u32 edx;
+  u32 ebx;
+  u32 ebp;
+  u32 esi;
+  u32 edi;
+};
+
+struct Task tasks[NUM_TASKS];
+u32 active_task_idx;
+
+__attribute__((naked)) void user_mode()
+{
+  int i = 0;
+  u32 id = tasks[active_task_idx].id;
+  while(1)
+  {
+    ++i;
+    if( i > 1000000 * id) 
+    {
+      print_u32_hex(id);
+      i = 0; 
+    }
+  }
+}
+
+void init_task(struct Task* task, u32 id, u32 eip)
+{
+  task->id     = id;
+  task->ss     = 0x23;
+  task->esp    = (u32) &task->stack[TASK_STACK_SIZE - 1];
+  task->eflags = 0;
+  task->cs     = 0x1b;
+  task->eip    = eip;
+}
+
+void init_tasks()
+{
+  for(u32 i = 0; i < NUM_TASKS; ++i)
+  {
+    init_task(&tasks[i], i + 1, (u32) user_mode);
+  }
+}
+
+u32 esp = 0;
+
+__attribute__((naked)) void task_switch()
+{
+  asm volatile("pusha; mov %%esp, %0;" : "=r"(esp));
+
+  tasks[active_task_idx].edi    = read_addr(esp + 0);
+  tasks[active_task_idx].esi    = read_addr(esp + 4);
+  tasks[active_task_idx].ebp    = read_addr(esp + 8);
+  tasks[active_task_idx].ebx    = read_addr(esp + 16);
+  tasks[active_task_idx].edx    = read_addr(esp + 20);
+  tasks[active_task_idx].ecx    = read_addr(esp + 24);
+  tasks[active_task_idx].eax    = read_addr(esp + 28);
+
+  tasks[active_task_idx].eip    = read_addr(esp + 32);
+  tasks[active_task_idx].cs     = read_addr(esp + 36);
+  tasks[active_task_idx].eflags = read_addr(esp + 40);
+  tasks[active_task_idx].esp    = read_addr(esp + 44);
+  tasks[active_task_idx].ss     = read_addr(esp + 48);
+
+  active_task_idx = (active_task_idx + 1) % NUM_TASKS;
+
+  write_addr(esp + 0,  tasks[active_task_idx].edi);
+  write_addr(esp + 4,  tasks[active_task_idx].esi);
+  write_addr(esp + 8,  tasks[active_task_idx].ebp);
+  write_addr(esp + 16, tasks[active_task_idx].ebx);
+  write_addr(esp + 20, tasks[active_task_idx].edx);
+  write_addr(esp + 24, tasks[active_task_idx].ecx);
+  write_addr(esp + 28, tasks[active_task_idx].eax);
+
+  write_addr(esp + 32, tasks[active_task_idx].eip);
+  write_addr(esp + 36, tasks[active_task_idx].cs);
+  write_addr(esp + 40, tasks[active_task_idx].eflags | 0x200);
+  write_addr(esp + 44, tasks[active_task_idx].esp);
+  write_addr(esp + 48, tasks[active_task_idx].ss);
+
+  asm volatile("popa;");
+  asm volatile ("iret");
+}
+
+__attribute__((naked)) void timer_interrupt_handler()
+{
+  asm volatile("cli;"); // will be enabled again by setting EFLAGS.IF in task_switch
+  asm volatile("push %eax");
+  asm volatile("mov $0x20, %al");
+  asm volatile("outb %al, $0x20"); // end of interrupt pic1, expected by the pic master
+  asm volatile("outb %al, $0xa0"); // end of interrupt pic2, for pic slave, not always needed
+  asm volatile("pop %eax");
+  asm volatile("jmp task_switch;");
 }
 
 void enable_interrupts(u32 pIDTR)
 {
-  asm volatile ("lidt (%0); sti;" :: "a"(pIDTR));
+  asm volatile ("lidt (%0);" :: "a"(pIDTR)); // EFLAGS.IF will be set with the first task switch 
 }
 
 void set_interrupt_handler(u8 idx, u32 handler)
@@ -642,32 +741,24 @@ __attribute__((naked)) void switch_to_user_mode()
   // 3. EFLAGS
   // 4. code segmenent selector cs
   // 5. instruction pointer EIP
-  //
-  // This code here turn interrupts on again by setting the EFLAGS.IF
-  // pop %eax
-  // or $0x200, %eax
-  // push %eax
 
-  asm volatile ("   \
-    cli;            \
-    mov $0x23, %ax; \
-    mov %ax, %ds;   \
-    mov %ax, %es;   \
-    mov %ax, %fs;   \
-    mov %ax, %gs;   \
-                    \
-    mov %esp, %eax; \
-                    \
-    push $0x23;     \
-    push %eax;      \
-    pushf;          \
-    pop %eax;       \
-    or $0x200, %eax;\
-    push %eax;      \
-    push $0x1b;     \
-    push $user_mode;\
-    iret;           \
-  ");
+  // these registers will be pushed by interrupt handlers, for the first task switch we have to push them ourselves
+  asm volatile("push %0" :: "r"(tasks[active_task_idx].ss));
+  asm volatile("push %0" :: "r"(tasks[active_task_idx].esp));
+  asm volatile("push %0" :: "r"(tasks[active_task_idx].eflags | 0x200));
+  asm volatile("push %0" :: "r"(tasks[active_task_idx].cs));
+  asm volatile("push %0" :: "r"(tasks[active_task_idx].eip));
+
+  // initialize general registers to zero for the first task switch
+  asm volatile("xor %eax, %eax;");
+  asm volatile("xor %ebx, %ebx;");
+  asm volatile("xor %ecx, %ecx;");
+  asm volatile("xor %edx, %edx;");
+  asm volatile("xor %edi, %edi;");
+  asm volatile("xor %esi, %esi;");
+  asm volatile("xor %ebp, %ebp;");
+
+  asm volatile("jmp task_switch;");
 }
 
 char* base = (char*) (0xb8000);
@@ -725,4 +816,8 @@ void clear_screen()
     }
   }
 }
+
+
+
+
 

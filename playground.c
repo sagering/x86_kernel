@@ -1,54 +1,29 @@
 
-void switch_to_user_mode();
+#define u32 unsigned int
 
-int main()
+extern u32 eip;
+extern u32 cs;
+extern u32 eflags;
+extern u32 esp;
+extern u32 ss;
+
+__attribute__((naked)) void something() { int j = 0; ++j; }
+__attribute__((naked)) void ir13()
 {
-  switch_to_user_mode();
+  asm volatile("push %0" :: "r"(eip));
+  asm volatile("push %0" :: "r"(cs));
+  asm volatile("push %0" :: "r"(eflags & 0x200));
+  asm volatile("push %0" :: "r"(esp));
+  asm volatile("push %0" :: "r"(ss));
+
+  asm volatile("xor %eax, %eax;");
+  asm volatile("xor %ebx, %ebx;");
+  asm volatile("xor %ecx, %ecx;");
+  asm volatile("xor %edx, %edx;");
+  asm volatile("xor %edi, %edi;");
+  asm volatile("xor %esi, %esi;");
+  asm volatile("xor %ebp, %ebp;");
+
+  something();
 }
-
-typedef unsigned int u32;
-struct ir_frame;
-
-__attribute__((interrupt)) void ir13(struct ir_frame* f)
-{
-  u32 volatile error = 0xff;
-  asm volatile ("mov -0x8(%%ebp), %0" : "=r"(error) );
-}
-
-__attribute__((naked)) void switch_to_user_mode()
-{
-  // IRET expectes following data on the stack;
-  // 1. stack segment selector ss
-  // 2. stack pointer after IRET
-  // 3. EFLAGS
-  // 4. code segmenent selector cs
-  // 5. instruction pointer EIP
-  //
-  // This code here turn interrupts on again by setting the EFLAGS.IF
-  // pop %eax
-  // or $0x200, %eax
-  // push %eax
-
-  asm volatile ("   \
-    cli;            \
-    mov $0x20, %ax; \
-    mov %ax, %ds;   \
-    mov %ax, %es;   \
-    mov %ax, %fs;   \
-    mov %ax, %gs;   \
-                    \
-    mov %esp, %eax; \
-                    \
-    pushl $0x10;    \
-    pushl %eax;     \
-    pushf;          \
-    pop %eax;       \
-    or $0x200, %eax;\
-    push %eax;      \
-    pushl $0x18;    \
-    push $main;     \
-    iret;           \
-  ");
-}
-
 
