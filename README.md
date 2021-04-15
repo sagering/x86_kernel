@@ -1,11 +1,15 @@
+# What is this?
+
+This is an educational project in writing a x86, protected mode kernel in C.
+
+1. Bootloader loads the kernel into memory, sets up initial segments, switches 
+   to protected mode an jumps into the C kernel code.
+2. The kernel sets up segments, interrupts, the programmable interrupt timer (PIT),   paging, multi tasking and then jumps into user mode.
+3. On timer interrupts, the kernel switches switches user taks in a round robin fashion.
+
+
+# Build & Run
 1. Install qemu-system-x86, vim, git, make, binutils, gcc, nasm
-2. Write bootloader.asm
-   * size has to be 512 bytes
-   * compile with: nasm -f bin bootloader.asm -o bootloader
-   * -f flag is to produce raw binary without any extras
-3. Create image
-   * dd -if=bootloader of=disk.img bs=512 seek=0 count=1
-4. Start qemu
-   * qemu-system-i386 -machine q35 -fda disk.img
+2. make run
 
 
